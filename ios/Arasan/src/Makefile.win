@@ -1,0 +1,448 @@
+# Arasan Makefile for use with NMAKE on the Windows platform
+# Copyright 2004-2021 by Jon Dart. All Rights Reserved.
+#
+VERSION=22.3
+LINK_VERSION=22.3
+#
+#TARGET = win32
+TARGET = win64
+
+# Set PLATFORM=XP for a Windows XP compatible build
+PLATFORM=MODERN
+
+#TRACE=/D_TRACE 
+#DEBUG=/Zi -D_DEBUG -DUNIT_TESTS
+#LDDEBUG=/DEBUG
+BUILD_ROOT=..
+UTIL=util
+
+# set to enable compliation with Syzygy tablebase support
+SYZYGY_TBS = 1
+
+# location of SYZYGY tablebase code
+STB=syzygy/src
+
+# enable NUMA support
+#NUMA=1
+
+# location of hwloc library (needed if NUMA enabled)
+HWLOC64=E:\chess\hwloc-win64-build-2.0.4
+HWLOC32=E:\chess\hwloc-win32-build-2.0.4
+
+!If "$(TARGET)" == "win64"
+!Ifndef ARASANX
+ARASANX = arasanx-64
+!Ifdef NUMA
+ARASANX = $(ARASANX)-numa
+!Endif
+!Endif
+ARCH=/D_WIN64
+HWLOC=$(HWLOC64)
+!Else
+!Ifndef ARASANX
+ARASANX = arasanx-32
+!Ifdef NUMA
+ARASANX = $(ARASANX)-numa
+!Endif
+!Endif
+HWLOC=$(HWLOC32)
+!Endif
+
+!Ifdef DEBUG
+BUILD_TYPE=debug
+!Else
+BUILD_TYPE=release
+!Endif
+
+BUILD = $(BUILD_ROOT)\$(TARGET)\$(BUILD_TYPE)
+TUNE_BUILD = $(BUILD_ROOT)\$(TARGET)\$(BUILD_TYPE)-tune
+PROFILE = $(BUILD_ROOT)\$(TARGET)\profile
+PROFDATA = $(BUILD_ROOT)\$(TARGET)\profdata
+PGO_BUILD = $(BUILD_ROOT)\$(TARGET)\pgo_build
+RELEASE = $(BUILD_ROOT)\release
+# relative to root:
+SOURCE_ARCHIVE = release\arasan_source$(VERSION).zip
+
+!If "$(PLATFORM)"=="XP"
+CFLAGS=$(CFLAGS) /D_USING_V110_SDK71_
+!Endif
+!IfDef NUMA
+CFLAGS=$(CFLAGS) /DNUMA /I$(HWLOC)/include
+NUMA_LIBS=$(HWLOC)/lib/libhwloc.lib
+NUMA_OBJS=$(BUILD)/topo.obj
+NUMA_PROFILE_OBJS=$(PROFILE)/topo.obj
+NUMA_TUNE_OBJS=$(TUNE_BUILD)/topo.obj
+!Endif
+
+!Ifdef ARASAN_VERSION
+CFLAGS=$(CFLAGS) -DARASAN_VERSION=$(ARASAN_VERSION)
+!Else
+CFLAGS=$(CFLAGS) -DARASAN_VERSION=$(VERSION)
+!Endif
+TESTS = ..\tests
+
+# SMP flags. Note: we don't support a non-SMP build any more.
+!Ifdef DEBUG
+SMP=/MTd /DSMP /DSMP_STATS
+!Else
+SMP=/MT /DSMP /DSMP_STATS
+!Endif
+# Do not run profile multithreaded - fails on current VC++ versions
+#PROF_RUN_SMP=-c 2
+
+TUNE_FLAGS=-DTUNE
+
+LD=link
+CL=cl
+
+# Visual Studio defs (Visual Studio 2012 or later recommended)
+CFLAGS = $(CFLAGS) $(ARCH) /GA /GF /EHsc /D_CONSOLE /D_CRT_SECURE_NO_DEPRECATE /GF /DNOMINMAX /W2 $(TRACE) $(SMP) $(DEBUG) $(CFLAGS)
+POPCNT_FLAGS = -DUSE_POPCNT
+BMI2_FLAGS = -DBMI2
+AVX2_FLAGS = -DBMI2 /arch:AVX2
+!Ifndef DEBUG
+!If "$(TARGET)"=="win64"
+!If "$(PLATFORM)" == "XP"
+OPT  = /Ox /Gr /Gy /GS- /GL /DNDEBUG
+!Else
+OPT  = /Ox /Gr /Gy /Oi /GS- /GL /DUSE_INTRINSICS /DNDEBUG
+!Endif
+LINKOPT = /LTCG /OPT:REF,ICF
+!Else
+OPT  = /Ox /Gr /Gy /GS- /GL /DUSE_INTRINSICS /DNDEBUG
+LINKOPT = /LTCG /OPT:REF
+!Endif
+!Endif	
+LD_FLAGS =
+TB_FLAGS = $(CFLAGS) $(DEBUG) $(SMP) /Gr /O1 /GS- /I$(TB) /I.
+TB_PROFILE_FLAGS = $(TB_FLAGS)
+PROF_GEN_FLAGS = $(CFLAGS) $(OPT)
+PROF_RUN_FLAGS = -H 64M $(PROF_RUN_SMP)
+PROF_LINK_FLAGS = /LTCG:PGINSTRUMENT /pgd:$(PROFILE)\arasanx.pgd
+PROF_GEN_LD = link
+
+default: dirs $(BUILD)\$(ARASANX).exe
+
+profile: dirs $(PROFILE)\$(ARASANX).exe
+
+tuning: dirs $(BUILD)\tuner.exe
+
+utils: $(BUILD)\pgnselect.exe $(BUILD)\playchess.exe $(BUILD)\makebook.exe $(BUILD)\makeeco.exe $(BUILD)\ecocoder.exe $(BUILD)\selfplay.exe
+
+!IfDef SYZYGY_TBS
+CFLAGS=$(CFLAGS) -I. -DSYZYGY_TBS
+STB_FLAGS = /TP -I. $(CFLAGS)
+STB_PROFILE_FLAGS = $(STB_FLAGS)
+TB_OBJS = $(TB_OBJS) $(BUILD)\syzygy.obj $(BUILD)\tbprobe.obj
+TB_TUNE_OBJS = $(TB_TUNE_OBJS) $(TUNE_BUILD)\syzygy.obj $(TUNE_BUILD)\tbprobe.obj
+TB_PROFILE_OBJS = $(TB_PROFILE_OBJS) $(PROFILE)\syzygy.obj $(PROFILE)\tbprobe.obj
+$(BUILD)\tbprobe.obj: $(STB)\tbprobe.c
+	$(CL) $(STB_FLAGS) $(OPT) $(DEBUG) /c /Fo$@ $(STB)\tbprobe.c
+$(TUNE_BUILD)\tbprobe.obj: $(STB)\tbprobe.c
+	$(CL) $(STB_FLAGS) $(OPT) $(DEBUG) /c /Fo$@ $(STB)\tbprobe.c
+$(PROFILE)\tbprobe.obj: $(STB)\tbprobe.c
+	$(CL) $(STB_PROFILE_FLAGS) $(OPT) $(DEBUG) /c /Fo$@ $(STB)\tbprobe.c
+!Endif
+
+# Linker flags
+LDFLAGS  = kernel32.lib user32.lib winmm.lib $(NUMA_LIBS) $(LD_FLAGS) /nologo /incremental:no /opt:ref /stack:4000000 /version:$(LINK_VERSION)
+!If "$(PLATFORM)" == "XP"
+!If "$(TARGET)" == "win64"
+LDFLAGS = $(LDFLAGS) /subsystem:console,5.02
+!Else
+LDFLAGS = $(LDFLAGS) /subsystem:console,5.01
+!Endif
+!Else
+LDFLAGS = $(LDFLAGS) /subsystem:console
+!Endif
+
+ARASANX_OBJS = $(BUILD)\arasanx.obj $(BUILD)\tester.obj \
+$(BUILD)\protocol.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj \
+$(BUILD)\bookread.obj $(BUILD)\bookwrit.obj \
+$(BUILD)\calctime.obj $(BUILD)\legal.obj $(BUILD)\eco.obj \
+$(BUILD)\learn.obj $(BUILD)\bench.obj \
+$(BUILD)\ecodata.obj $(BUILD)\threadp.obj $(BUILD)\threadc.obj \
+$(BUILD)\unit.obj $(TB_OBJS) $(NUMA_OBJS)
+
+TUNER_OBJS = $(TUNE_BUILD)\tuner.obj \
+$(TUNE_BUILD)\attacks.obj $(TUNE_BUILD)\bhash.obj $(TUNE_BUILD)\bitboard.obj \
+$(TUNE_BUILD)\board.obj $(TUNE_BUILD)\boardio.obj $(TUNE_BUILD)\options.obj \
+$(TUNE_BUILD)\chess.obj $(TUNE_BUILD)\material.obj $(TUNE_BUILD)\movegen.obj \
+$(TUNE_BUILD)\scoring.obj $(TUNE_BUILD)\searchc.obj \
+$(TUNE_BUILD)\see.obj $(TUNE_BUILD)\globals.obj $(TUNE_BUILD)\search.obj \
+$(TUNE_BUILD)\notation.obj $(TUNE_BUILD)\hash.obj $(TUNE_BUILD)\stats.obj \
+$(TUNE_BUILD)\bitprobe.obj $(TUNE_BUILD)\epdrec.obj $(TUNE_BUILD)\chessio.obj \
+$(TUNE_BUILD)\movearr.obj $(TUNE_BUILD)\log.obj \
+$(TUNE_BUILD)\bookread.obj $(TUNE_BUILD)\bookwrit.obj \
+$(TUNE_BUILD)\calctime.obj $(TUNE_BUILD)\legal.obj $(TUNE_BUILD)\eco.obj \
+$(TUNE_BUILD)\learn.obj $(TUNE_BUILD)\bench.obj $(TUNE_BUILD)\protocol.obj \
+$(TUNE_BUILD)\tester.obj $(TUNE_BUILD)\ecodata.obj $(TUNE_BUILD)\threadp.obj \
+$(TUNE_BUILD)\threadc.obj \
+$(TUNE_BUILD)\tune.obj $(TB_TUNE_OBJS) $(NUMA_TUNE_OBJS)
+
+ARASANX_PROFILE_OBJS = $(PROFILE)\arasanx.obj $(PROFILE)\tester.obj \
+$(PROFILE)\protocol.obj \
+$(PROFILE)\attacks.obj $(PROFILE)\bhash.obj $(PROFILE)\bitboard.obj \
+$(PROFILE)\board.obj $(PROFILE)\boardio.obj $(PROFILE)\options.obj \
+$(PROFILE)\chess.obj $(PROFILE)\material.obj $(PROFILE)\movegen.obj \
+$(PROFILE)\params.obj $(PROFILE)\scoring.obj $(PROFILE)\searchc.obj \
+$(PROFILE)\see.obj $(PROFILE)\globals.obj $(PROFILE)\search.obj \
+$(PROFILE)\notation.obj $(PROFILE)\hash.obj $(PROFILE)\stats.obj \
+$(PROFILE)\bitprobe.obj $(PROFILE)\epdrec.obj $(PROFILE)\chessio.obj \
+$(PROFILE)\movearr.obj $(PROFILE)\log.obj \
+$(PROFILE)\bookread.obj $(PROFILE)\bookwrit.obj \
+$(PROFILE)\calctime.obj $(PROFILE)\legal.obj $(PROFILE)\eco.obj \
+$(PROFILE)\ecodata.obj $(PROFILE)\learn.obj $(PROFILE)\bench.obj \
+$(PROFILE)\threadp.obj $(PROFILE)\threadc.obj $(PROFILE)\unit.obj $(TB_PROFILE_OBJS) $(NUMA_PROFILE_OBJS)
+
+MAKEBOOK_OBJS = $(BUILD)\makebook.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj \
+$(BUILD)\bookread.obj $(BUILD)\bookwrit.obj \
+$(BUILD)\calctime.obj $(BUILD)\legal.obj $(BUILD)\eco.obj \
+$(BUILD)\learn.obj $(BUILD)\bench.obj $(BUILD)\protocol.obj \
+$(BUILD)\tester.obj $(BUILD)\ecodata.obj $(BUILD)\threadp.obj \
+$(BUILD)\threadc.obj $(TB_OBJS) $(NUMA_OBJS)
+
+MAKEECO_OBJS = $(BUILD)\makeeco.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj \
+$(BUILD)\bookread.obj $(BUILD)\bookwrit.obj \
+$(BUILD)\calctime.obj $(BUILD)\legal.obj $(BUILD)\eco.obj \
+$(BUILD)\learn.obj $(BUILD)\bench.obj $(BUILD)\protocol.obj \
+$(BUILD)\tester.obj $(BUILD)\ecodata.obj $(BUILD)\threadp.obj \
+$(BUILD)\threadc.obj $(TB_OBJS) $(NUMA_OBJS)
+
+ECOCODER_OBJS = $(BUILD)\ecocoder.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj \
+$(BUILD)\bookread.obj $(BUILD)\bookwrit.obj \
+$(BUILD)\calctime.obj $(BUILD)\legal.obj $(BUILD)\eco.obj \
+$(BUILD)\learn.obj $(BUILD)\bench.obj $(BUILD)\protocol.obj \
+$(BUILD)\tester.obj $(BUILD)\ecodata.obj $(BUILD)\threadp.obj \
+$(BUILD)\threadc.obj $(TB_OBJS) $(NUMA_OBJS)
+
+PGNSELECT_OBJS = $(BUILD)\pgnselect.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj $(BUILD)\eco.obj \
+$(BUILD)\ecodata.obj \
+$(BUILD)\bookwrit.obj $(BUILD)\bookread.obj $(BUILD)\calctime.obj \
+$(BUILD)\legal.obj $(BUILD)\protocol.obj $(BUILD)\tester.obj \
+$(BUILD)\learn.obj $(BUILD)\bench.obj $(BUILD)\threadp.obj \
+$(BUILD)\threadc.obj $(TB_OBJS) $(NUMA_OBJS)
+
+PLAYCHESS_OBJS = $(BUILD)\playchess.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj $(BUILD)\eco.obj \
+$(BUILD)\ecodata.obj \
+$(BUILD)\bookwrit.obj $(BUILD)\bookread.obj $(BUILD)\calctime.obj \
+$(BUILD)\legal.obj $(BUILD)\protocol.obj $(BUILD)\tester.obj \
+$(BUILD)\learn.obj $(BUILD)\bench.obj $(BUILD)\threadp.obj \
+$(BUILD)\threadc.obj $(TB_OBJS) $(NUMA_OBJS)
+
+SELFPLAY_OBJS = $(BUILD)\selfplay.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj $(BUILD)\eco.obj \
+$(BUILD)\ecodata.obj \
+$(BUILD)\bookwrit.obj $(BUILD)\bookread.obj $(BUILD)\calctime.obj \
+$(BUILD)\legal.obj $(BUILD)\protocol.obj $(BUILD)\tester.obj \
+$(BUILD)\learn.obj $(BUILD)\bench.obj $(BUILD)\threadp.obj \
+$(BUILD)\threadc.obj $(TB_OBJS) $(NUMA_OBJS)
+
+EPDFILTER_OBJS = $(BUILD)\epdfilter.obj \
+$(BUILD)\attacks.obj $(BUILD)\bhash.obj $(BUILD)\bitboard.obj \
+$(BUILD)\board.obj $(BUILD)\boardio.obj $(BUILD)\options.obj \
+$(BUILD)\chess.obj $(BUILD)\material.obj $(BUILD)\movegen.obj \
+$(BUILD)\params.obj $(BUILD)\scoring.obj $(BUILD)\searchc.obj \
+$(BUILD)\see.obj $(BUILD)\globals.obj $(BUILD)\search.obj \
+$(BUILD)\notation.obj $(BUILD)\hash.obj $(BUILD)\stats.obj \
+$(BUILD)\bitprobe.obj $(BUILD)\epdrec.obj $(BUILD)\chessio.obj \
+$(BUILD)\movearr.obj $(BUILD)\log.obj $(BUILD)\eco.obj \
+$(BUILD)\ecodata.obj \
+$(BUILD)\bookwrit.obj $(BUILD)\bookread.obj $(BUILD)\calctime.obj \
+$(BUILD)\legal.obj $(BUILD)\bench.obj $(BUILD)\protocol.obj \
+$(BUILD)\tester.obj $(BUILD)\learn.obj $(BUILD)\threadp.obj \
+$(BUILD)\threadc.obj $(TB_OBJS) $(NUMA_OBJS)
+
+{}.cpp{$(BUILD)}.obj:
+    $(CL) $(OPT) $(DEBUG) $(CFLAGS) /c /Fo$@ $<
+
+{$(UTIL)}.cpp{$(BUILD)}.obj:
+    $(CL) $(OPT) $(DEBUG) $(CFLAGS) $(POPCNT_FLAGS) -I. /c /Fo$@ $<
+
+{}.cpp{$(TUNE_BUILD)}.obj:
+    $(CL) $(OPT) $(DEBUG) $(CFLAGS) $(TUNE_FLAGS) /c /Fo$@ $<
+
+{}.cpp{$(PROFILE)}.obj:
+    $(CL) $(PROF_GEN_FLAGS) /c /Fo$@ $<
+
+$(BUILD)\makebook.exe:  $(MAKEBOOK_OBJS)
+        $(LD) $(MAKEBOOK_OBJS) $(LINKOPT) $(LDFLAGS) $(LDDEBUG) /out:$(BUILD)\makebook.exe
+
+$(BUILD)\makeeco.exe:  $(MAKEECO_OBJS)
+        $(LD) $(MAKEECO_OBJS) $(LINKOPT) $(LDFLAGS) /out:$(BUILD)\makeeco.exe
+
+$(BUILD)\ecocoder.exe:  $(ECOCODER_OBJS)
+        $(LD) $(ECOCODER_OBJS) $(LINKOPT) $(LDFLAGS) /out:$(BUILD)\ecocoder.exe
+
+$(BUILD)\$(ARASANX).exe:  dirs $(ARASANX_OBJS)
+        $(LD) $(ARASANX_OBJS) $(LINKOPT) $(LDFLAGS) $(LDDEBUG) /out:$(BUILD)\$(ARASANX).exe
+
+$(BUILD)\tuner.exe:  dirs $(TUNER_OBJS)
+        $(LD) $(TUNER_OBJS) $(LINKOPT) $(LDFLAGS) $(LDDEBUG) /out:$(BUILD)\tuner.exe
+
+$(BUILD)\pgnselect.exe: dirs $(PGNSELECT_OBJS)
+        $(LD) $(PGNSELECT_OBJS) $(LINKOPT) $(LDFLAGS) $(LDDEBUG) /out:$(BUILD)\pgnselect.exe
+
+$(BUILD)\playchess.exe: dirs $(PLAYCHESS_OBJS)
+        $(LD) $(PLAYCHESS_OBJS) $(LINKOPT) $(LDFLAGS) $(LDDEBUG) /out:$(BUILD)\playchess.exe
+
+$(BUILD)\selfplay.exe: dirs $(SELFPLAY_OBJS)
+        $(LD) $(SELFPLAY_OBJS) $(LINKOPT) $(LDFLAGS) $(LDDEBUG) /out:$(BUILD)\selfplay.exe
+
+$(BUILD)\epdfilter.exe: dirs $(EPDFILTER_OBJS)
+        $(LD) $(EPDFILTER_OBJS) $(LINKOPT) $(LDFLAGS) $(LDDEBUG) /out:$(BUILD)\epdfilter.exe
+
+!IfDef NALIMOV_TBS
+$(BUILD)\nalimov.obj: nalimov.cpp
+    $(CL) $(TB_FLAGS) /c /Fo$@ nalimov.cpp
+
+$(PROFILE)\nalimov.obj: nalimov.cpp
+    $(CL) $(TB_PROFILE_FLAGS) /c /Fo$@ nalimov.cpp
+!Endif
+
+$(PROFILE)\$(ARASANX).exe:  $(ARASANX_PROFILE_OBJS)
+    $(PROF_GEN_LD) $(PROF_LINK_FLAGS) $(LDFLAGS) $(ARASANX_PROFILE_OBJS) /out:$(PROFILE)\$(ARASANX).exe
+
+utils: dirs $(BUILD)\pgnselect.exe
+
+profile-run: dirs
+    del $(PROFDATA)\*.pgc
+    $(PROFILE)\$(ARASANX) $(PROF_RUN_FLAGS) bench
+
+profile-optimized: $(ARASANX_PROFILE_OBJS)
+    copy /y $(PROFILE)\*.pgc $(PGO_BUILD)
+    copy /y $(PROFILE)\*.pgd $(PGO_BUILD)
+    copy /y $(PROFILE)\*.obj $(PGO_BUILD)
+    $(LD) /ltcg:pgo /pgd:$(PGO_BUILD)\arasanx.pgd $(LDFLAGS) $(ARASANX_PROFILE_OBJS) /out:$(BUILD)\$(ARASANX).exe
+
+profile-build: dirs profile profile-run profile-optimized 
+
+popcnt: dirs
+	SET CFLAGS=$(POPCNT_FLAGS)
+	set ARASANX=$(ARASANX)-popcnt
+	nmake
+
+bmi2: dirs
+	SET CFLAGS=$(POPCNT_FLAGS) $(BMI2_FLAGS)
+	set ARASANX=$(ARASANX)-bmi2
+	nmake
+
+avx2: dirs
+	SET CFLAGS=$(POPCNT_FLAGS) $(AVX2_FLAGS)
+	set ARASANX=$(ARASANX)-avx2
+	nmake
+
+avx2-profiled:
+	SET CFLAGS=$(POPCNT_FLAGS) $(AVX2_FLAGS)
+	SET ARASANX=$(ARASANX)-avx2
+	nmake profile-build
+
+profiled: profile-build
+
+popcnt-profiled:
+	SET CFLAGS=$(POPCNT_FLAGS)
+	SET ARASANX=$(ARASANX)-popcnt
+	nmake profile-build
+
+bmi2-profiled:
+	SET CFLAGS=$(POPCNT_FLAGS) $(BMI2_FLAGS)
+	SET ARASANX=$(ARASANX)-bmi2
+	nmake profile-build
+
+release: $(RELEASE) $(SOURCE_ARCHIVE)
+
+$(SOURCE_ARCHIVE):
+	call release.bat $(SOURCE_ARCHIVE)
+
+$(PROFILE):
+	md $(PROFILE)
+
+$(BUILD):
+	md $(BUILD)
+
+$(BUILD)-tune:
+	md $(BUILD)-tune
+
+$(PROFDATA):
+	md $(PROFDATA)
+
+$(PGO_BUILD):
+	md $(PGO_BUILD)
+
+$(RELEASE):
+	md $(RELEASE)
+
+clean: dirs
+	del $(BUILD)\*.obj
+	del $(TUNE_BUILD)\*.obj
+	del $(TUNE_BUILD)\*.asm
+	del $(BUILD)\*.exe
+	del $(BUILD)\*.asm
+	del $(PROFILE)\*.asm
+	del $(PROFILE)\*.pgc
+	del $(PROFILE)\*.pgd
+	del $(PROFILE)\*.obj
+	del $(PROFILE)\*.exe
+	del /q $(RELEASE)\*.*
+	del /q $(PGO_BUILD)\*.*
+
+dirs: $(BUILD) $(TUNE_BUILD) $(PROFILE) $(PROFDATA) $(PGO_BUILD) $(RELEASE)
+
+
+
+

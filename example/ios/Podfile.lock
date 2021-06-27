@@ -1,0 +1,28 @@
+PODS:
+  - arasan (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - integration_test (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - arasan (from `.symlinks/plugins/arasan/ios`)
+  - Flutter (from `Flutter`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+
+EXTERNAL SOURCES:
+  arasan:
+    :path: ".symlinks/plugins/arasan/ios"
+  Flutter:
+    :path: Flutter
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+
+SPEC CHECKSUMS:
+  arasan: 8b689bdfddea45d7e4a7e2646f22ed4dd91bd984
+  Flutter: 434fef37c0980e73bb6479ef766c45957d4b510c
+  integration_test: 6eb66a19f7104200dcfdd62bc0077e1b09686e4f
+
+PODFILE CHECKSUM: aafe91acc616949ddb318b77800a7f51bffa2a4c
+
+COCOAPODS: 1.10.1
